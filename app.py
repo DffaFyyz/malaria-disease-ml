@@ -7,13 +7,28 @@ import pandas as pd
 
 app = Flask(__name__)
 
-# 1. LOAD MODEL BERSAMAAN SAAT SERVER MENYALA
-print("Loading model...")
-model = joblib.load("model/malaria_rf_model.pkl")
-print("Model loaded successfully!")
+MODEL_CONFIGS = {
+    "random_forest": {
+        "name": "Random Forest",
+        "path": "model/malaria_rf_model.pkl",
+    },
+    "logistic_regression": {
+        "name": "Logistic Regression",
+        "path": "model/malaria_logistic_regression_model.pkl",
+    },
+}
+
+print("Loading models...")
+MODELS = {
+    model_id: {
+        **config,
+        "estimator": joblib.load(config["path"]),
+    }
+    for model_id, config in MODEL_CONFIGS.items()
+}
+print("Models loaded successfully!")
 
 
-# 2. FUNGSI EKSTRAKSI (Ini "Mata" servermu)
 def extract_features_from_image(img_bgr):
     # --- 1. MASKING SEL ---
     img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
@@ -63,7 +78,7 @@ def extract_features_from_image(img_bgr):
     )
     parasite_count = sum([1 for cnt in contours_parasite if cv2.contourArea(cnt) > 25])
 
-    # --- 4. TEKSTUR (GLCM) ---
+    # --- TEKSTUR (GLCM) ---
     texture_contrast = 0
     if largest_cell_cnt is not None:
         x, y, w, h = cv2.boundingRect(largest_cell_cnt)
@@ -83,7 +98,25 @@ def extract_features_from_image(img_bgr):
     return [cell_area, parasite_count, parasite_area, texture_contrast]
 
 
-# 3. ENDPOINT API (Menerima Request)
+# 3. ENDPOINT API
+@app.route("/models", methods=["GET"])
+def list_models():
+    return jsonify(
+        {
+            "status": "success",
+            "models": [
+                {
+                    "id": model_id,
+                    "name": config["name"],
+                    "file": config["path"],
+                }
+                for model_id, config in MODEL_CONFIGS.items()
+            ],
+            "default_model": "random_forest",
+        }
+    )
+
+
 @app.route("/predict", methods=["POST"])
 def predict():
     # Cek apakah ada file gambar yang dikirim
@@ -94,6 +127,20 @@ def predict():
     if file.filename == "":
         return jsonify({"error": "No selected image"}), 400
 
+    selected_model_id = request.form.get("model", "random_forest")
+    if selected_model_id not in MODELS:
+        return (
+            jsonify(
+                {
+                    "error": "Invalid model selection",
+                    "available_models": list(MODELS.keys()),
+                }
+            ),
+            400,
+        )
+
+    selected_model = MODELS[selected_model_id]
+
     try:
         # Ajaibnya Flask: Membaca gambar langsung dari memori tanpa di-save ke hardisk
         filestr = file.read()
@@ -103,7 +150,6 @@ def predict():
         if img_bgr is None:
             return jsonify({"error": "Invalid image format"}), 400
 
-        # 1. Gunakan "Mata" untuk mengekstrak 4 angka
         features = extract_features_from_image(img_bgr)
 
         # 2. Gunakan "Otak" (.pkl) untuk menebak dari 4 angka tersebut
@@ -116,14 +162,19 @@ def predict():
         ]
         features_df = pd.DataFrame([features], columns=nama_kolom)
 
-        # Prediksi menggunakan DataFrame
-        prediction = model.predict(features_df)
-        probabilities = model.predict_proba(features_df)
+        # Prediksi menggunakan model yang dipilih dari frontend
+        estimator = selected_model["estimator"]
+        prediction = estimator.predict(features_df)
+        probabilities = estimator.predict_proba(features_df)
 
         # probabilities mengembalikan array 2D, contoh: [[0.12, 0.88]] (Artinya: 12% Sehat, 88% Sakit)
         # Kita ambil angka probabilitas dari tebakan yang menang
         predicted_class = prediction[0]
         confidence_score = probabilities[0][predicted_class]
+        class_probabilities = {
+            "Uninfected": round(float(probabilities[0][0]), 4),
+            "Parasitized": round(float(probabilities[0][1]), 4),
+        }
 
         # Mapping hasil angka menjadi teks (0 = Sehat, 1 = Sakit)
         result_text = "Parasitized" if predicted_class == 1 else "Uninfected"
@@ -134,6 +185,9 @@ def predict():
                 "status": "success",
                 "prediction": result_text,
                 "confidence": round(float(confidence_score), 4),
+                "model": selected_model_id,
+                "model_name": selected_model["name"],
+                "class_probabilities": class_probabilities,
                 "extracted_features": {
                     "cell_area": features[0],
                     "parasite_count": features[1],
