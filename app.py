@@ -3,11 +3,6 @@ import json
 import os
 
 from flask import Flask, request, jsonify
-import cv2
-import numpy as np
-import joblib
-from skimage.feature import graycomatrix, graycoprops
-import pandas as pd
 
 try:
     from flask_cors import CORS
@@ -17,6 +12,7 @@ except ImportError:
 app = Flask(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 METADATA_PATH = BASE_DIR / "model" / "model_metadata.json"
+MODELS = {}
 
 if CORS is not None:
     cors_origins = [
@@ -37,18 +33,28 @@ MODEL_CONFIGS = {
     },
 }
 
-print("Loading models...")
-MODELS = {
-    model_id: {
-        **config,
-        "estimator": joblib.load(config["path"]),
-    }
-    for model_id, config in MODEL_CONFIGS.items()
-}
-print("Models loaded successfully!")
+def get_models():
+    global MODELS
+    if not MODELS:
+        import joblib
+
+        print("Loading models...")
+        MODELS = {
+            model_id: {
+                **config,
+                "estimator": joblib.load(BASE_DIR / config["path"]),
+            }
+            for model_id, config in MODEL_CONFIGS.items()
+        }
+        print("Models loaded successfully!")
+    return MODELS
 
 
 def extract_features_from_image(img_bgr):
+    import cv2
+    import numpy as np
+    from skimage.feature import graycomatrix, graycoprops
+
     # --- 1. MASKING SEL ---
     img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
     img_blur = cv2.GaussianBlur(img_gray, (5, 5), 0)
@@ -164,20 +170,25 @@ def predict():
         return jsonify({"error": "No selected image"}), 400
 
     selected_model_id = request.form.get("model", "random_forest")
-    if selected_model_id not in MODELS:
+    models = get_models()
+    if selected_model_id not in models:
         return (
             jsonify(
                 {
                     "error": "Invalid model selection",
-                    "available_models": list(MODELS.keys()),
+                    "available_models": list(models.keys()),
                 }
             ),
             400,
         )
 
-    selected_model = MODELS[selected_model_id]
+    selected_model = models[selected_model_id]
 
     try:
+        import cv2
+        import numpy as np
+        import pandas as pd
+
         # Ajaibnya Flask: Membaca gambar langsung dari memori tanpa di-save ke hardisk
         filestr = file.read()
         npimg = np.frombuffer(filestr, np.uint8)
