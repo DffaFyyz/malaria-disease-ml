@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import os
 
 from flask import Flask, request, jsonify
 import cv2
@@ -8,9 +9,22 @@ import joblib
 from skimage.feature import graycomatrix, graycoprops
 import pandas as pd
 
+try:
+    from flask_cors import CORS
+except ImportError:
+    CORS = None
+
 app = Flask(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 METADATA_PATH = BASE_DIR / "model" / "model_metadata.json"
+
+if CORS is not None:
+    cors_origins = [
+        origin.strip()
+        for origin in os.environ.get("CORS_ORIGINS", "*").split(",")
+        if origin.strip()
+    ]
+    CORS(app, resources={r"/*": {"origins": cors_origins}})
 
 MODEL_CONFIGS = {
     "random_forest": {
@@ -101,6 +115,11 @@ def extract_features_from_image(img_bgr):
 
     # Return urutan harus SAMA PERSIS dengan saat training!
     return [cell_area, parasite_count, parasite_area, texture_contrast]
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
 
 
 # 3. ENDPOINT API
@@ -220,4 +239,5 @@ def predict():
 
 if __name__ == "__main__":
     # Jalankan server di port 5000
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
