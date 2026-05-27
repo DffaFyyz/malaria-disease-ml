@@ -1,3 +1,6 @@
+from pathlib import Path
+import json
+
 from flask import Flask, request, jsonify
 import cv2
 import numpy as np
@@ -6,6 +9,8 @@ from skimage.feature import graycomatrix, graycoprops
 import pandas as pd
 
 app = Flask(__name__)
+BASE_DIR = Path(__file__).resolve().parent
+METADATA_PATH = BASE_DIR / "model" / "model_metadata.json"
 
 MODEL_CONFIGS = {
     "random_forest": {
@@ -115,6 +120,18 @@ def list_models():
             "default_model": "random_forest",
         }
     )
+
+
+@app.route("/metadata", methods=["GET"])
+def get_metadata():
+    try:
+        with METADATA_PATH.open("r", encoding="utf-8") as metadata_file:
+            metadata = json.load(metadata_file)
+        return jsonify({"status": "success", "metadata": metadata})
+    except FileNotFoundError:
+        return jsonify({"error": "Model metadata file not found"}), 404
+    except json.JSONDecodeError:
+        return jsonify({"error": "Model metadata file is not valid JSON"}), 500
 
 
 @app.route("/predict", methods=["POST"])
